@@ -1,0 +1,72 @@
+[project]
+name = "knowledge-agent"
+version = "0.1.0"
+description = "A knowledge sharing agent for company-wide knowledge management"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-adk>=1.20.0",
+    "google-genai>=1.53.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "google-cloud-aiplatform>=1.70.0",
+    "python-dotenv>=1.2.1",
+    "slack-sdk>=3.39.0",
+    "pygithub>=2.8.1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "poethepoet>=0.38.0",
+    "pytest>=9.0.2",
+    "ruff>=0.14.8",
+]
+
+[tool.poe.tasks]
+adk = "adk"
+lint = "ruff check ."
+format = "ruff format ."
+check = ["lint", "format"]
+test = "pytest tests/"
+backend = "uvicorn backend.main:app --reload --port 8000"
+adk-web = "adk web agent/"
+
+[tool.poe.tasks.create-agent-engine]
+cmd = "adk deploy agent_engine --project ${project} --region ${region} agent"
+args = [
+    { name = "project", required = true, help = "GCP Project ID" },
+    { name = "region", default = "europe-west2", help = "GCP Region" }
+]
+
+[tool.poe.tasks.deploy-agent-engine]
+cmd = "adk deploy agent_engine --project ${project} --region ${region} --agent_engine_id ${agent_engine_id} agent"
+args = [
+    { name = "project", required = true, help = "GCP Project ID" },
+    { name = "region", default = "europe-west2", help = "GCP Region" },
+    { name = "agent_engine_id", required = true, help = "Agent Engine ID" }
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# Prompts are text content, line length doesn't matter
+"agent/prompts/**/*.py" = ["E501"]
+# Tools have long strings that are fine
+"agent/tools/*.py" = ["E501"]
+# Backend has some long strings
+"backend/*.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

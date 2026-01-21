@@ -1,0 +1,32 @@
+# =============================================================================
+# Required Variables
+# =============================================================================
+
+# Your GCP project ID
+project_id = "your-gcp-project-id"
+
+# GCP region for deployment
+region = "europe-west2"
+
+# GitHub owner/organization for the agent repo
+github_owner = "your-github-username"
+
+# GitHub repository name for the agent (just the repo name, not full path)
+github_repo = "my_agent"
+
+# Knowledge base repository (format: owner/repo)
+knowledge_repo = "your-github-username/knowledge-base"
+
+# =============================================================================
+# Optional Variables
+# =============================================================================
+
+# Name for the Cloud Run service (default: knowledge-agent)
+# service_name = "knowledge-agent"
+
+# Branch to use for knowledge base (default: main)
+# knowledge_branch = "main"
+
+# Enable IAP for Google Workspace authentication (default: false)
+# enable_iap = true
+# iap_allowed_domain = "datatonic.com"

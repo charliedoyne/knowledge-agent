@@ -1,0 +1,239 @@
+# =============================================================================
+# Automatic Clustering Workflow for Knowledge Base Repository
+# =============================================================================
+#
+# Copy this file to your knowledge repo at: .github/workflows/update-clusters.yaml
+#
+# This workflow automatically clusters notes when markdown files are added/changed.
+# It uses Gemini to analyze notes and group them into topics, then updates clusters.json.
+#
+# Prerequisites:
+# 1. Run Terraform in the agent repo to set up WIF and service accounts
+# 2. Set the following repository variables (Settings > Secrets and variables > Actions > Variables):
+#    - GCP_PROJECT_ID: Your GCP project ID
+#    - GCP_REGION: Your GCP region (e.g., europe-west2)
+#    - WIF_PROVIDER: The Workload Identity Provider (from Terraform output)
+#    - WIF_SERVICE_ACCOUNT: The clusterer service account (from Terraform output)
+#
+# 3. Set the following repository secrets (Settings > Secrets and variables > Actions > Secrets):
+#    - GITHUB_APP_ID: Your GitHub App ID
+#    - GITHUB_APP_PRIVATE_KEY: Your GitHub App private key (base64 encoded)
+#    - GITHUB_APP_INSTALLATION_ID: Your GitHub App installation ID
+#
+# =============================================================================
+
+name: Update Clusters
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'  # Only run when markdown files change
+
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  cluster:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write  # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install google-genai PyGithub python-dotenv
+
+      - name: Create clustering script
+        run: |
+          cat > cluster_notes.py << 'SCRIPT'
+          #!/usr/bin/env python3
+          """Cluster knowledge notes into topics using Gemini AI."""
+
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          # Configure for Vertex AI
+          os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+
+          from google import genai
+          from github import Auth, Github, GithubIntegration
+
+
+          def get_github_client():
+              """Get authenticated GitHub client."""
+              app_id = os.environ.get("GITHUB_APP_ID")
+              private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+              installation_id = os.environ.get("GITHUB_APP_INSTALLATION_ID")
+
+              if not all([app_id, private_key, installation_id]):
+                  raise ValueError("GitHub App credentials not configured")
+
+              # Handle base64-encoded private key
+              if not private_key.startswith("-----BEGIN"):
+                  import base64
+                  private_key = base64.b64decode(private_key).decode("utf-8")
+
+              auth = Auth.AppAuth(int(app_id), private_key)
+              gi = GithubIntegration(auth=auth)
+              installation = gi.get_app_installation(int(installation_id))
+              access_token = gi.get_access_token(installation.id)
+
+              return Github(auth=Auth.Token(access_token.token))
+
+
+          def extract_title(content: str, filename: str) -> str:
+              """Extract title from markdown content."""
+              match = re.match(r"^#\s+(.+)$", content.strip(), re.MULTILINE)
+              if match:
+                  return match.group(1).strip()
+              return filename.replace("-", " ").replace("_", " ").replace(".md", "").title()
+
+
+          def main():
+              print("=== Knowledge Notes Clustering ===\n")
+
+              # Find all markdown files in the repo
+              notes = {}
+              for md_file in Path(".").glob("*.md"):
+                  if md_file.name.lower() == "readme.md":
+                      continue
+                  content = md_file.read_text(encoding="utf-8")
+                  title = extract_title(content, md_file.name)
+                  notes[md_file.name] = {
+                      "title": title,
+                      "content": content[:500],  # First 500 chars for clustering
+                  }
+
+              print(f"Found {len(notes)} notes")
+
+              if len(notes) == 0:
+                  print("No notes found, exiting.")
+                  return
+
+              # Create summary for AI
+              notes_summary = "\n".join(
+                  f"- {filename}: {data['title']}\n  Preview: {data['content'][:200]}..."
+                  for filename, data in notes.items()
+              )
+
+              prompt = f"""Analyze these knowledge base notes and group them into 3-5 logical topic clusters.
+
+          Notes:
+          {notes_summary}
+
+          Return a JSON object with this exact structure:
+          {{
+            "clusters": [
+              {{
+                "name": "Topic Name",
+                "description": "Brief description of this topic",
+                "notes": ["filename1.md", "filename2.md"]
+              }}
+            ]
+          }}
+
+          Rules:
+          - Each note should be in exactly one cluster
+          - Use clear, concise topic names (1-3 words)
+          - Group by theme/purpose, not just keywords
+          - Return ONLY the JSON, no other text
+          """
+
+              # Initialize Gemini client
+              project_id = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+              location = os.environ.get("GCP_REGION", "europe-west2")
+
+              if project_id:
+                  os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+              os.environ["GOOGLE_CLOUD_LOCATION"] = location
+
+              print("\nClustering notes with Gemini...")
+              client = genai.Client()
+
+              response = client.models.generate_content(
+                  model="gemini-2.5-flash",
+                  contents=prompt,
+              )
+
+              # Parse response
+              response_text = response.text.strip()
+              if response_text.startswith("```"):
+                  response_text = response_text.split("```")[1]
+                  if response_text.startswith("json"):
+                      response_text = response_text[4:]
+                  response_text = response_text.strip()
+
+              clusters = json.loads(response_text)
+
+              print("\nClusters:")
+              for cluster in clusters.get("clusters", []):
+                  print(f"\n  {cluster['name']}:")
+                  print(f"    {cluster['description']}")
+                  for note in cluster.get("notes", []):
+                      print(f"    - {note}")
+
+              # Push to GitHub
+              repo_name = os.environ.get("GITHUB_REPOSITORY")
+              if not repo_name:
+                  # Save locally if not in GitHub Actions
+                  with open("clusters.json", "w") as f:
+                      json.dump(clusters, f, indent=2)
+                  print("\nSaved to clusters.json")
+                  return
+
+              print(f"\nPushing clusters.json to {repo_name}...")
+
+              client = get_github_client()
+              repo = client.get_repo(repo_name)
+
+              content = json.dumps(clusters, indent=2)
+
+              try:
+                  existing = repo.get_contents("clusters.json")
+                  repo.update_file(
+                      path="clusters.json",
+                      message="Update clusters.json [skip ci]",
+                      content=content,
+                      sha=existing.sha,
+                  )
+              except Exception:
+                  repo.create_file(
+                      path="clusters.json",
+                      message="Add clusters.json [skip ci]",
+                      content=content,
+                  )
+
+              print("Done!")
+
+
+          if __name__ == "__main__":
+              main()
+          SCRIPT
+
+      - name: Run clustering
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_APP_ID: ${{ secrets.GITHUB_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_APP_INSTALLATION_ID: ${{ secrets.GITHUB_APP_INSTALLATION_ID }}
+        run: python cluster_notes.py
