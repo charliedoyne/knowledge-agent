@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Book, Plus, Menu, X, ChevronDown, ChevronUp, Edit3, GitPullRequest, Trash2, FileText, Sparkles, Check, XCircle, Clock, ExternalLink } from 'lucide-react'
+import { Send, Book, Plus, Menu, X, ChevronDown, ChevronUp, Edit3, GitPullRequest, Trash2, FileText, Sparkles, Clock, ExternalLink } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
